@@ -123,6 +123,14 @@ export async function addTextToPage(
   return await pdf.save();
 }
 
+export async function updateMetadata(pdfBuffer: ArrayBuffer, metadata: { title?: string, author?: string, subject?: string }): Promise<Uint8Array> {
+  const pdf = await PDFDocument.load(pdfBuffer);
+  if (metadata.title) pdf.setTitle(metadata.title);
+  if (metadata.author) pdf.setAuthor(metadata.author);
+  if (metadata.subject) pdf.setSubject(metadata.subject);
+  return await pdf.save();
+}
+
 export async function docxToPDF(buffer: ArrayBuffer): Promise<Uint8Array> {
   const result = await mammoth.convertToHtml({ arrayBuffer: buffer });
   const html = result.value;

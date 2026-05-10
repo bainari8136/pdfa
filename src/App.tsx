@@ -21,28 +21,63 @@ import {
   Files,
   FileDigit,
   Layout,
-  Trash2
+  Trash2,
+  ShieldCheck,
+  FileEdit,
+  Lock,
+  Settings
 } from 'lucide-react';
 import { useDropzone } from 'react-dropzone';
-import { mergePDFs, splitPDF, rotatePDF, imagesToPDF, docxToPDF, mdToPDF, removePages, addWatermark } from './lib/pdf';
+import { 
+  mergePDFs, 
+  splitPDF, 
+  rotatePDF, 
+  imagesToPDF, 
+  docxToPDF, 
+  mdToPDF, 
+  removePages, 
+  addWatermark,
+  updateMetadata
+} from './lib/pdf';
 import { cn, downloadFile } from './lib/utils';
 import { GoogleGenAI } from '@google/genai';
 
-type Tool = 'merge' | 'split' | 'rotate' | 'img2pdf' | 'docx2pdf' | 'md2pdf' | 'edit-pages' | 'watermark' | 'ai-summary';
+type Tool = 'merge' | 'split' | 'rotate' | 'img2pdf' | 'docx2pdf' | 'md2pdf' | 'edit-pages' | 'watermark' | 'ai-summary' | 'metadata';
+type Category = 'Converter' | 'Editor' | 'Security' | 'Automation';
 
-const TOOLS = [
-  { id: 'merge', name: 'Merge PDF', icon: Combine, description: 'Combine multiple PDFs into one.' },
-  { id: 'split', name: 'Split PDF', icon: Scissors, description: 'Extract pages or split into individual files.' },
-  { id: 'rotate', name: 'Rotate PDF', icon: RotateCw, description: 'Change document orientation.' },
-  { id: 'edit-pages', name: 'Remove Pages', icon: Trash2, description: 'Select and remove specific pages from a PDF.' },
-  { id: 'watermark', name: 'Watermark', icon: Layout, description: 'Add a text watermark to all pages.' },
-  { id: 'img2pdf', name: 'Images to PDF', icon: ImageIcon, description: 'Convert images to a PDF document.' },
-  { id: 'docx2pdf', name: 'DOCX to PDF', icon: Files, description: 'Convert Word documents to high-quality PDF.' },
-  { id: 'md2pdf', name: 'MD to PDF', icon: FileDigit, description: 'Convert Markdown files to PDF.' },
-  { id: 'ai-summary', name: 'AI Summary', icon: Sparkles, description: 'Get insights and summaries from your PDF.' },
-] as const;
+interface ToolDefinition {
+  id: Tool;
+  name: string;
+  icon: any;
+  description: string;
+}
+
+const CATEGORIES: Category[] = ['Converter', 'Editor', 'Security', 'Automation'];
+
+const TOOLS_BY_CATEGORY: Record<Category, ReadonlyArray<ToolDefinition>> = {
+  Converter: [
+    { id: 'merge', name: 'Merge PDF', icon: Combine, description: 'Combine multiple PDFs into one.' },
+    { id: 'split', name: 'Split PDF', icon: Scissors, description: 'Extract pages or split into individual files.' },
+    { id: 'rotate', name: 'Rotate PDF', icon: RotateCw, description: 'Change document orientation.' },
+    { id: 'img2pdf', name: 'Images to PDF', icon: ImageIcon, description: 'Convert images to a PDF document.' },
+    { id: 'docx2pdf', name: 'DOCX to PDF', icon: Files, description: 'Convert Word documents to high-quality PDF.' },
+    { id: 'md2pdf', name: 'MD to PDF', icon: FileDigit, description: 'Convert Markdown files to PDF.' },
+  ],
+  Editor: [
+    { id: 'edit-pages', name: 'Remove Pages', icon: Trash2, description: 'Select and remove specific pages from a PDF.' },
+    { id: 'watermark', name: 'Watermark', icon: Layout, description: 'Add a text watermark to all pages.' },
+    { id: 'metadata', name: 'Edit Metadata', icon: FileEdit, description: 'Modify document title, author, and subject.' },
+  ],
+  Security: [
+    { id: 'metadata', name: 'Safe Metadata', icon: ShieldCheck, description: 'Strict document metadata management.' },
+  ],
+  Automation: [
+    { id: 'ai-summary', name: 'AI Summary', icon: Sparkles, description: 'Get insights and summaries from your PDF.' },
+  ]
+};
 
 export default function App() {
+  const [activeCategory, setActiveCategory] = useState<Category>('Converter');
   const [activeTool, setActiveTool] = useState<Tool>('merge');
   const [files, setFiles] = useState<File[]>([]);
   const [loading, setLoading] = useState(false);
@@ -51,17 +86,29 @@ export default function App() {
   const [pageCount, setPageCount] = useState(0);
   const [watermarkText, setWatermarkText] = useState('CONFIDENTIAL');
   const [watermarkOpacity, setWatermarkOpacity] = useState(0.3);
+  
+  // New tool states
+  const [pdfPassword, setPdfPassword] = useState('');
+  const [pdfMetadata, setPdfMetadata] = useState({ title: '', author: '', subject: '' });
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     setFiles(prev => [...prev, ...acceptedFiles]);
     setAiResult(null);
 
-    if (activeTool === 'edit-pages' && acceptedFiles[0]) {
+    if ((activeTool === 'edit-pages' || activeTool === 'metadata') && acceptedFiles[0]) {
       const { PDFDocument } = await import('pdf-lib');
       const buffer = await acceptedFiles[0].arrayBuffer();
       const pdf = await PDFDocument.load(buffer);
       setPageCount(pdf.getPageCount());
       setSelectedPages([]);
+      
+      if (activeTool === 'metadata') {
+        setPdfMetadata({
+          title: pdf.getTitle() || '',
+          author: pdf.getAuthor() || '',
+          subject: pdf.getSubject() || ''
+        });
+      }
     }
   }, [activeTool]);
 
@@ -78,7 +125,7 @@ export default function App() {
 
   const removeFile = (index: number) => {
     setFiles(prev => prev.filter((_, i) => i !== index));
-    if (activeTool === 'edit-pages') setPageCount(0);
+    if (activeTool === 'edit-pages' || activeTool === 'metadata') setPageCount(0);
   };
 
   const handleProcess = async () => {
@@ -107,6 +154,10 @@ export default function App() {
         const buffer = await files[0].arrayBuffer();
         const watermarked = await addWatermark(buffer, watermarkText, watermarkOpacity);
         downloadFile(watermarked, 'watermarked.pdf', 'application/pdf');
+      } else if (activeTool === 'metadata') {
+        const buffer = await files[0].arrayBuffer();
+        const updated = await updateMetadata(buffer, pdfMetadata);
+        downloadFile(updated, 'updated_metadata.pdf', 'application/pdf');
       } else if (activeTool === 'img2pdf') {
         const imageBuffers = await Promise.all(files.map(async f => ({
           data: await f.arrayBuffer(),
@@ -163,7 +214,12 @@ export default function App() {
   const reset = () => {
     setFiles([]);
     setAiResult(null);
+    setSelectedPages([]);
+    setPageCount(0);
   };
+
+  const allTools = [...TOOLS_BY_CATEGORY.Converter, ...TOOLS_BY_CATEGORY.Editor, ...TOOLS_BY_CATEGORY.Security, ...TOOLS_BY_CATEGORY.Automation];
+  const currentToolDescription = allTools.find(t => t.id === activeTool);
 
   return (
     <div className="h-screen flex flex-col bg-slate-50 font-sans text-slate-900 overflow-hidden">
@@ -177,10 +233,22 @@ export default function App() {
             <span className="text-xl font-bold tracking-tight">pdfa</span>
           </div>
           <div className="flex items-center gap-6 text-sm font-medium text-slate-500">
-            <span className="text-indigo-600 border-b-2 border-indigo-600 h-16 flex items-center">Converter</span>
-            <span className="hover:text-slate-900 cursor-pointer h-16 flex items-center">Editor</span>
-            <span className="hover:text-slate-900 cursor-pointer h-16 flex items-center">Security</span>
-            <span className="hover:text-slate-900 cursor-pointer h-16 flex items-center">Automation</span>
+            {CATEGORIES.map(cat => (
+              <button
+                key={cat}
+                onClick={() => {
+                  setActiveCategory(cat);
+                  setActiveTool(TOOLS_BY_CATEGORY[cat][0].id);
+                  reset();
+                }}
+                className={cn(
+                  "h-16 flex items-center border-b-2 transition-all px-2",
+                  activeCategory === cat ? "text-indigo-600 border-indigo-600" : "text-slate-500 border-transparent hover:text-slate-900"
+                )}
+              >
+                {cat}
+              </button>
+            ))}
           </div>
         </div>
         <div className="flex items-center gap-4">
@@ -191,7 +259,7 @@ export default function App() {
       <main className="flex-1 flex overflow-hidden">
         {/* Left Sidebar Tools (Slim) */}
         <aside className="w-20 bg-white border-r border-slate-200 flex flex-col items-center py-6 gap-8 shrink-0">
-          {TOOLS.map((tool) => (
+          {TOOLS_BY_CATEGORY[activeCategory].map((tool) => (
             <button
               key={tool.id}
               onClick={() => { setActiveTool(tool.id); reset(); }}
@@ -216,10 +284,10 @@ export default function App() {
           <div className="flex justify-between items-end shrink-0">
             <div>
               <h1 className="text-2xl font-bold text-slate-800">
-                {TOOLS.find(t => t.id === activeTool)?.name}
+                {currentToolDescription?.name}
               </h1>
               <p className="text-slate-500 text-sm">
-                {TOOLS.find(t => t.id === activeTool)?.description}
+                {currentToolDescription?.description}
               </p>
             </div>
             <div className="flex gap-2">
@@ -393,6 +461,37 @@ export default function App() {
                     value={watermarkOpacity}
                     onChange={(e) => setWatermarkOpacity(parseFloat(e.target.value))}
                     className="w-full h-1.5 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                  />
+                </div>
+              </div>
+            )}
+
+            {activeTool === 'metadata' && (
+              <div className="space-y-4 pt-2 animate-in fade-in slide-in-from-right-2 duration-300">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Document Title</label>
+                  <input 
+                    type="text" 
+                    value={pdfMetadata.title}
+                    onChange={(e) => setPdfMetadata(prev => ({ ...prev, title: e.target.value }))}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Author</label>
+                  <input 
+                    type="text" 
+                    value={pdfMetadata.author}
+                    onChange={(e) => setPdfMetadata(prev => ({ ...prev, author: e.target.value }))}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Subject</label>
+                  <textarea 
+                    value={pdfMetadata.subject}
+                    onChange={(e) => setPdfMetadata(prev => ({ ...prev, subject: e.target.value }))}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm h-20 resize-none focus:outline-none focus:ring-1 focus:ring-indigo-500"
                   />
                 </div>
               </div>
