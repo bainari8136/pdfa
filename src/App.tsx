@@ -19,19 +19,23 @@ import {
   ChevronRight,
   Info,
   Files,
-  FileDigit
+  FileDigit,
+  Layout,
+  Trash2
 } from 'lucide-react';
 import { useDropzone } from 'react-dropzone';
-import { mergePDFs, splitPDF, rotatePDF, imagesToPDF, docxToPDF, mdToPDF } from './lib/pdf';
+import { mergePDFs, splitPDF, rotatePDF, imagesToPDF, docxToPDF, mdToPDF, removePages, addWatermark } from './lib/pdf';
 import { cn, downloadFile } from './lib/utils';
 import { GoogleGenAI } from '@google/genai';
 
-type Tool = 'merge' | 'split' | 'rotate' | 'img2pdf' | 'docx2pdf' | 'md2pdf' | 'ai-summary';
+type Tool = 'merge' | 'split' | 'rotate' | 'img2pdf' | 'docx2pdf' | 'md2pdf' | 'edit-pages' | 'watermark' | 'ai-summary';
 
 const TOOLS = [
   { id: 'merge', name: 'Merge PDF', icon: Combine, description: 'Combine multiple PDFs into one.' },
   { id: 'split', name: 'Split PDF', icon: Scissors, description: 'Extract pages or split into individual files.' },
   { id: 'rotate', name: 'Rotate PDF', icon: RotateCw, description: 'Change document orientation.' },
+  { id: 'edit-pages', name: 'Remove Pages', icon: Trash2, description: 'Select and remove specific pages from a PDF.' },
+  { id: 'watermark', name: 'Watermark', icon: Layout, description: 'Add a text watermark to all pages.' },
   { id: 'img2pdf', name: 'Images to PDF', icon: ImageIcon, description: 'Convert images to a PDF document.' },
   { id: 'docx2pdf', name: 'DOCX to PDF', icon: Files, description: 'Convert Word documents to high-quality PDF.' },
   { id: 'md2pdf', name: 'MD to PDF', icon: FileDigit, description: 'Convert Markdown files to PDF.' },
@@ -43,11 +47,23 @@ export default function App() {
   const [files, setFiles] = useState<File[]>([]);
   const [loading, setLoading] = useState(false);
   const [aiResult, setAiResult] = useState<string | null>(null);
+  const [selectedPages, setSelectedPages] = useState<number[]>([]);
+  const [pageCount, setPageCount] = useState(0);
+  const [watermarkText, setWatermarkText] = useState('CONFIDENTIAL');
+  const [watermarkOpacity, setWatermarkOpacity] = useState(0.3);
 
-  const onDrop = useCallback((acceptedFiles: File[]) => {
+  const onDrop = useCallback(async (acceptedFiles: File[]) => {
     setFiles(prev => [...prev, ...acceptedFiles]);
     setAiResult(null);
-  }, []);
+
+    if (activeTool === 'edit-pages' && acceptedFiles[0]) {
+      const { PDFDocument } = await import('pdf-lib');
+      const buffer = await acceptedFiles[0].arrayBuffer();
+      const pdf = await PDFDocument.load(buffer);
+      setPageCount(pdf.getPageCount());
+      setSelectedPages([]);
+    }
+  }, [activeTool]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -62,6 +78,7 @@ export default function App() {
 
   const removeFile = (index: number) => {
     setFiles(prev => prev.filter((_, i) => i !== index));
+    if (activeTool === 'edit-pages') setPageCount(0);
   };
 
   const handleProcess = async () => {
@@ -82,6 +99,14 @@ export default function App() {
         const buffer = await files[0].arrayBuffer();
         const rotated = await rotatePDF(buffer, 90);
         downloadFile(rotated, 'rotated.pdf', 'application/pdf');
+      } else if (activeTool === 'edit-pages') {
+        const buffer = await files[0].arrayBuffer();
+        const edited = await removePages(buffer, selectedPages);
+        downloadFile(edited, 'edited.pdf', 'application/pdf');
+      } else if (activeTool === 'watermark') {
+        const buffer = await files[0].arrayBuffer();
+        const watermarked = await addWatermark(buffer, watermarkText, watermarkOpacity);
+        downloadFile(watermarked, 'watermarked.pdf', 'application/pdf');
       } else if (activeTool === 'img2pdf') {
         const imageBuffers = await Promise.all(files.map(async f => ({
           data: await f.arrayBuffer(),
@@ -285,6 +310,43 @@ export default function App() {
                   </div>
                 </div>
 
+                {/* Page Selection for Edit-Pages */}
+                {activeTool === 'edit-pages' && pageCount > 0 && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm"
+                  >
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="text-sm font-bold uppercase tracking-widest text-slate-500">Select Pages to Remove</h3>
+                      <span className="text-xs text-slate-400">{selectedPages.length} pages selected</span>
+                    </div>
+                    <div className="grid grid-cols-5 sm:grid-cols-8 md:grid-cols-10 gap-2 max-h-48 overflow-y-auto pr-2 custom-scrollbar">
+                      {Array.from({ length: pageCount }).map((_, i) => (
+                        <button
+                          key={i}
+                          onClick={() => {
+                            setSelectedPages(prev => 
+                              prev.includes(i) ? prev.filter(p => p !== i) : [...prev, i]
+                            );
+                          }}
+                          className={cn(
+                            "aspect-square rounded-md flex items-center justify-center text-xs font-bold transition-all border",
+                            selectedPages.includes(i)
+                              ? "bg-red-500 text-white border-red-600 shadow-sm"
+                              : "bg-slate-50 text-slate-600 border-slate-200 hover:border-indigo-300"
+                          )}
+                        >
+                          {i + 1}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="mt-3 text-[10px] text-slate-400 italic">
+                      Click a page number to mark it for deletion. The output PDF will exclude these pages.
+                    </p>
+                  </motion.div>
+                )}
+
                 {/* AI Snippet - if result exists */}
                 {aiResult && (
                   <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm max-h-64 overflow-y-auto">
@@ -307,6 +369,35 @@ export default function App() {
           <h2 className="text-sm font-bold text-slate-800 uppercase tracking-widest mb-6">Process Settings</h2>
           
           <div className="space-y-6 flex-1 overflow-y-auto pr-1">
+            {activeTool === 'watermark' && (
+              <div className="space-y-4 pt-2 animate-in fade-in slide-in-from-right-2 duration-300">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Watermark Text</label>
+                  <input 
+                    type="text" 
+                    value={watermarkText}
+                    onChange={(e) => setWatermarkText(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <div className="flex justify-between">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Opacity</label>
+                    <span className="text-xs font-mono">{Math.round(watermarkOpacity * 100)}%</span>
+                  </div>
+                  <input 
+                    type="range" 
+                    min="0" 
+                    max="1" 
+                    step="0.1"
+                    value={watermarkOpacity}
+                    onChange={(e) => setWatermarkOpacity(parseFloat(e.target.value))}
+                    className="w-full h-1.5 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                  />
+                </div>
+              </div>
+            )}
+
             <div className="space-y-2">
               <label className="text-xs font-semibold text-slate-500 uppercase tracking-tight">Output Standard</label>
               <div className="relative">

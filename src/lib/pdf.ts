@@ -63,6 +63,66 @@ export async function imagesToPDF(imageBuffers: { data: ArrayBuffer, type: strin
   return await pdfDoc.save();
 }
 
+export async function removePages(pdfBuffer: ArrayBuffer, pageIndices: number[]): Promise<Uint8Array> {
+  const pdf = await PDFDocument.load(pdfBuffer);
+  // Remove pages from end to start to avoid index shifting issues
+  const sortedIndices = [...pageIndices].sort((a, b) => b - a);
+  sortedIndices.forEach((index) => {
+    pdf.removePage(index);
+  });
+  return await pdf.save();
+}
+
+export async function addWatermark(pdfBuffer: ArrayBuffer, text: string, opacity: number = 0.3): Promise<Uint8Array> {
+  const pdf = await PDFDocument.load(pdfBuffer);
+  const pages = pdf.getPages();
+  
+  for (const page of pages) {
+    const { width, height } = page.getSize();
+    page.drawText(text, {
+      x: width / 4,
+      y: height / 2,
+      size: 50,
+      opacity: opacity,
+      rotate: degrees(45),
+      color: { type: 'RGB', red: 0.5, green: 0.5, blue: 0.5 } as any
+    });
+  }
+  
+  return await pdf.save();
+}
+
+export async function addTextToPage(
+  pdfBuffer: ArrayBuffer, 
+  text: string, 
+  x: number, 
+  y: number, 
+  pageIndex: number,
+  fontSize: number = 12,
+  colorHex: string = '#000000'
+): Promise<Uint8Array> {
+  const pdf = await PDFDocument.load(pdfBuffer);
+  const pages = pdf.getPages();
+  if (pageIndex >= pages.length) return pdfBuffer as any;
+
+  const page = pages[pageIndex];
+  
+  // Simple hex to RGB conversion
+  const hex = colorHex.replace('#', '');
+  const r = parseInt(hex.substring(0, 2), 16) / 255;
+  const g = parseInt(hex.substring(2, 4), 16) / 255;
+  const b = parseInt(hex.substring(4, 6), 16) / 255;
+
+  page.drawText(text, {
+    x,
+    y,
+    size: fontSize,
+    color: { type: 'RGB', red: r, green: g, blue: b } as any
+  });
+  
+  return await pdf.save();
+}
+
 export async function docxToPDF(buffer: ArrayBuffer): Promise<Uint8Array> {
   const result = await mammoth.convertToHtml({ arrayBuffer: buffer });
   const html = result.value;
