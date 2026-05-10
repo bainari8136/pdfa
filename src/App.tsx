@@ -17,20 +17,24 @@ import {
   Upload,
   Loader2,
   ChevronRight,
-  Info
+  Info,
+  Files,
+  FileDigit
 } from 'lucide-react';
 import { useDropzone } from 'react-dropzone';
-import { mergePDFs, splitPDF, rotatePDF, imagesToPDF } from './lib/pdf';
+import { mergePDFs, splitPDF, rotatePDF, imagesToPDF, docxToPDF, mdToPDF } from './lib/pdf';
 import { cn, downloadFile } from './lib/utils';
 import { GoogleGenAI } from '@google/genai';
 
-type Tool = 'merge' | 'split' | 'rotate' | 'img2pdf' | 'ai-summary';
+type Tool = 'merge' | 'split' | 'rotate' | 'img2pdf' | 'docx2pdf' | 'md2pdf' | 'ai-summary';
 
 const TOOLS = [
   { id: 'merge', name: 'Merge PDF', icon: Combine, description: 'Combine multiple PDFs into one.' },
   { id: 'split', name: 'Split PDF', icon: Scissors, description: 'Extract pages or split into individual files.' },
   { id: 'rotate', name: 'Rotate PDF', icon: RotateCw, description: 'Change document orientation.' },
   { id: 'img2pdf', name: 'Images to PDF', icon: ImageIcon, description: 'Convert images to a PDF document.' },
+  { id: 'docx2pdf', name: 'DOCX to PDF', icon: Files, description: 'Convert Word documents to high-quality PDF.' },
+  { id: 'md2pdf', name: 'MD to PDF', icon: FileDigit, description: 'Convert Markdown files to PDF.' },
   { id: 'ai-summary', name: 'AI Summary', icon: Sparkles, description: 'Get insights and summaries from your PDF.' },
 ] as const;
 
@@ -48,12 +52,12 @@ export default function App() {
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     multiple: true,
-    accept: activeTool === 'img2pdf' 
-      ? { 
-          'image/jpeg': ['.jpeg', '.jpg'], 
-          'image/png': ['.png'] 
-        } 
-      : { 'application/pdf': ['.pdf'] }
+    accept: (() => {
+      if (activeTool === 'img2pdf') return { 'image/jpeg': ['.jpeg', '.jpg'], 'image/png': ['.png'] };
+      if (activeTool === 'docx2pdf') return { 'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'] };
+      if (activeTool === 'md2pdf') return { 'text/markdown': ['.md'], 'text/plain': ['.txt'] };
+      return { 'application/pdf': ['.pdf'] };
+    })()
   } as any);
 
   const removeFile = (index: number) => {
@@ -85,6 +89,14 @@ export default function App() {
         })));
         const pdf = await imagesToPDF(imageBuffers);
         downloadFile(pdf, 'converted.pdf', 'application/pdf');
+      } else if (activeTool === 'docx2pdf') {
+        const buffer = await files[0].arrayBuffer();
+        const pdf = await docxToPDF(buffer);
+        downloadFile(pdf, `${files[0].name.split('.')[0]}.pdf`, 'application/pdf');
+      } else if (activeTool === 'md2pdf') {
+        const text = await files[0].text();
+        const pdf = await mdToPDF(text);
+        downloadFile(pdf, `${files[0].name.split('.')[0]}.pdf`, 'application/pdf');
       } else if (activeTool === 'ai-summary') {
         await handleAISummary();
       }
@@ -221,7 +233,10 @@ export default function App() {
                   Drag and drop files here, or <span className="text-indigo-600 cursor-pointer">browse files</span>
                 </p>
                 <p className="text-xs text-slate-400 mt-1 uppercase tracking-tight">
-                  {activeTool === 'img2pdf' ? 'Supports: JPG, PNG' : 'Supports: PDF documents'} (Max 50MB)
+                  {activeTool === 'img2pdf' ? 'Supports: JPG, PNG' : 
+                   activeTool === 'docx2pdf' ? 'Supports: DOCX Word documents' :
+                   activeTool === 'md2pdf' ? 'Supports: Markdown, TXT' :
+                   'Supports: PDF documents'} (Max 50MB)
                 </p>
               </motion.div>
             ) : (

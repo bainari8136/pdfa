@@ -1,4 +1,9 @@
 import { PDFDocument, degrees } from 'pdf-lib';
+import mammoth from 'mammoth';
+import { marked } from 'marked';
+import { jsPDF } from 'jspdf';
+import DOMPurify from 'dompurify';
+import html2canvas from 'html2canvas';
 
 export async function mergePDFs(pdfBuffers: ArrayBuffer[]): Promise<Uint8Array> {
   const mergedPdf = await PDFDocument.create();
@@ -56,4 +61,58 @@ export async function imagesToPDF(imageBuffers: { data: ArrayBuffer, type: strin
     });
   }
   return await pdfDoc.save();
+}
+
+export async function docxToPDF(buffer: ArrayBuffer): Promise<Uint8Array> {
+  const result = await mammoth.convertToHtml({ arrayBuffer: buffer });
+  const html = result.value;
+  return await htmlToPDF(html);
+}
+
+export async function mdToPDF(markdown: string): Promise<Uint8Array> {
+  const html = await marked.parse(markdown);
+  const cleanHtml = DOMPurify.sanitize(html);
+  return await htmlToPDF(cleanHtml);
+}
+
+async function htmlToPDF(html: string): Promise<Uint8Array> {
+  // Create a hidden container for rendering
+  const container = document.createElement('div');
+  container.className = 'markdown-body';
+  container.style.width = '800px';
+  container.style.padding = '40px';
+  container.style.position = 'fixed';
+  container.style.left = '-9999px';
+  container.style.top = '-9999px';
+  container.style.fontSize = '12pt';
+  container.style.lineHeight = '1.6';
+  container.style.fontFamily = 'Inter, sans-serif';
+  container.style.color = '#333';
+  container.innerHTML = html;
+  document.body.appendChild(container);
+
+  try {
+    const doc = new jsPDF({
+      orientation: 'p',
+      unit: 'pt',
+      format: 'a4',
+    });
+
+    await doc.html(container, {
+      margin: [40, 40, 40, 40],
+      autoPaging: 'text',
+      x: 0,
+      y: 0,
+      html2canvas: {
+        scale: 1,
+        useCORS: true,
+        logging: false,
+      },
+    });
+
+    const pdfOutput = doc.output('arraybuffer');
+    return new Uint8Array(pdfOutput);
+  } finally {
+    document.body.removeChild(container);
+  }
 }
